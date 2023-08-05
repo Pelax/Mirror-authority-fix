@@ -49,6 +49,9 @@ namespace Mirror
         float[] layerWeight;
         double nextSendTime;
 
+        RuntimeAnimatorController lastFrameRac = null;
+        bool forceSend = false;
+
         bool SendMessagesAllowed
         {
             get
@@ -95,7 +98,20 @@ namespace Mirror
             if (!animator.enabled)
                 return;
 
+            if (animator.runtimeAnimatorController != lastFrameRac)
+            {
+                // give the animator 1 frame to adapt to the change of RAC
+                lastFrameRac = animator.runtimeAnimatorController;
+                // also set the forceSend flag for next frame, once parameters are correct
+                // (they will all reset to default values in other peers with the RAC change)
+                forceSend = true;
+                return;
+            }
+
             CheckSendRate();
+
+            // reset force send after parameters were forcely sent
+            forceSend = false;
 
             for (int i = 0; i < animator.layerCount; i++)
             {
@@ -189,13 +205,13 @@ namespace Mirror
         void CheckSendRate()
         {
             double now = NetworkTime.localTime;
-            if (SendMessagesAllowed && syncInterval >= 0 && now > nextSendTime)
+            if (forceSend || (SendMessagesAllowed && syncInterval >= 0 && now > nextSendTime))
             {
                 nextSendTime = now + syncInterval;
 
                 using (NetworkWriterPooled writer = NetworkWriterPool.Get())
                 {
-                    if (WriteParameters(writer))
+                    if (WriteParameters(writer, forceSend))
                         SendAnimationParametersMessage(writer.ToArray());
                 }
             }
@@ -227,7 +243,7 @@ namespace Mirror
 
         void HandleAnimMsg(int stateHash, float normalizedTime, int layerId, float weight, NetworkReader reader)
         {
-            if (isOwned && clientAuthority)
+            if (authority)
                 return;
 
             // usually transitions will be triggered by parameters, if not, play anims directly.
@@ -245,7 +261,7 @@ namespace Mirror
 
         void HandleAnimParamsMsg(NetworkReader reader)
         {
-            if (isOwned && clientAuthority)
+            if (authority)
                 return;
 
             ReadParameters(reader);
